@@ -1,0 +1,186 @@
+# =============================================================================
+# Call-Center-AI 本地开发环境 Docker Compose
+# =============================================================================
+# 使用方法：
+#   启动所有服务：docker compose up
+#   启动并重建：  docker compose up --build
+#   后台运行：    docker compose up -d
+#   查看日志：    docker compose logs -f app
+#   停止服务：    docker compose down
+#   清理数据：    docker compose down -v
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 主应用服务
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: cicd/Dockerfile.dev
+    container_name: call-center-ai-app
+    ports:
+      - "8080:8080"
+    volumes:
+      # 挂载代码目录实现热重载
+      - ./app:/app/app:ro
+      # Allow writing to app/resources for RAG index
+      - ./app/resources:/app/app/resources:rw
+      - ./scripts:/app/scripts:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - ./public:/app/public:ro
+    environment:
+      # 应用配置
+      - VERSION=${VERSION:-0.0.0-dev}
+      - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-http://localhost:8080}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+      # 阿里云基础配置
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
+      - ALIYUN_REGION=${ALIYUN_REGION:-cn-shanghai}
+
+      # 通义千问 / 百炼平台（LLM + ASR 共用）
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - BAILIAN_API_KEY=${BAILIAN_API_KEY:-${DASHSCOPE_API_KEY}} # ASR 可用同一个 Key
+      - QWEN_MODEL_FAST=${QWEN_MODEL_FAST:-qwen-turbo}
+      - QWEN_MODEL_SLOW=${QWEN_MODEL_SLOW:-qwen-max}
+
+      # 阿里云 NLS 语音服务（TTS）
+      - ALIYUN_NLS_APP_KEY=${ALIYUN_NLS_APP_KEY}
+      - ALIYUN_TTS_VOICE=${ALIYUN_TTS_VOICE:-xiaoyun}
+
+      # Redis 缓存（指向容器内 Redis）
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_SSL=false
+      - REDIS_DB=0
+
+      # MongoDB 数据库（指向容器内 MongoDB）
+      - MONGODB_URI=mongodb://mongo:27017/call-center-ai
+      - MONGODB_DATABASE=call-center-ai
+
+      # 开发模式配置
+      - MOCK_TELEPHONY=${MOCK_TELEPHONY:-true}
+      - MOCK_STT=${MOCK_STT:-false}
+      - MOCK_TTS=${MOCK_TTS:-false}
+
+      # Azure 兼容（迁移过程中可选）
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - call-center-network
+
+  # ---------------------------------------------------------------------------
+  # Redis 缓存（本地开发用）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: call-center-ai-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - call-center-network
+
+  # ---------------------------------------------------------------------------
+  # MongoDB 数据库（本地开发用，替代 Cosmos DB）
+  # ---------------------------------------------------------------------------
+  mongo:
+    image: mongo:7
+    container_name: call-center-ai-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      # 开发环境不设置密码，生产环境请设置
+      - MONGO_INITDB_DATABASE=call-center-ai
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - call-center-network
+
+  # ---------------------------------------------------------------------------
+  # Mongo Express（数据库管理界面，可选）
+  # ---------------------------------------------------------------------------
+  mongo-express:
+    image: mongo-express:latest
+    container_name: call-center-ai-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin123
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - call-center-network
+    profiles:
+      - tools # 只在需要时启动：docker compose --profile tools up
+
+  # ---------------------------------------------------------------------------
+  # Redis Commander（Redis 管理界面，可选）
+  # ---------------------------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: call-center-ai-redis-commander
+    ports:
+      - "8082:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - call-center-network
+    profiles:
+      - tools # 只在需要时启动：docker compose --profile tools up
+
+# -----------------------------------------------------------------------------
+# 数据卷
+# -----------------------------------------------------------------------------
+volumes:
+  redis_data:
+    name: call-center-ai-redis-data
+  mongo_data:
+    name: call-center-ai-mongo-data
+
+# -----------------------------------------------------------------------------
+# 网络
+# -----------------------------------------------------------------------------
+networks:
+  call-center-network:
+    name: call-center-ai-network
+    driver: bridge

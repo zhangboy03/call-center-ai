@@ -1,0 +1,247 @@
+# SOP Schema for Postoperative Follow-up Calls
+# 术后随访 SOP 状态机定义
+
+version: "1.0"
+description: "品驰术后6月随访 SOP"
+
+# =============================================================================
+# Product Lines (影响症状标签)
+# =============================================================================
+product_lines:
+  DBS_PD:
+    name: "脑起搏器-帕金森"
+    symptom_tags: [震颤, 强直, 姿势, 步态, 开关现象, 异动]
+  DBS_Dystonia:
+    name: "脑起搏器-肌张力障碍"
+    symptom_tags: [扭转, 痉挛, 姿势异常]
+  VNS:
+    name: "迷走神经刺激"
+    symptom_tags: [发作频率, 发作程度, 药物减量]
+    guardrails: ["no_self_adjust"]
+  SNM:
+    name: "骶神经调控"
+    symptom_tags: [尿频, 尿急, 尿失禁, 排便]
+  SCS:
+    name: "脊髓电刺激"
+    symptom_tags: [疼痛, 活动能力]
+
+# =============================================================================
+# Flow Definition (10 Steps)
+# =============================================================================
+flow:
+  - id: intro
+    prompt: "您好，这里是品驰关爱中心，请问是{patient_name}本人吗？"
+    slots:
+      - name: is_patient
+        type: yes_no
+        required: true
+    next:
+      - condition: "is_patient == true"
+        goto: symptom_discussion
+      - condition: "is_patient == false"
+        goto: ask_caregiver
+
+  - id: ask_caregiver
+    prompt: "请问您是患者的家属吗？方便协助回答一些问题吗？"
+    slots:
+      - name: is_caregiver
+        type: yes_no
+        required: true
+    next:
+      - condition: "is_caregiver == true"
+        goto: symptom_discussion
+      - condition: "is_caregiver == false"
+        goto: call_failed
+
+  - id: symptom_discussion
+    prompt: "想了解一下您术后恢复情况。您现在主要症状改善了吗？比如{product_symptoms}这些方面？"
+    slots:
+      - name: symptom_improvement
+        type: multi_select
+        options: "$product.symptom_tags"
+        required: true
+      - name: symptom_change
+        type: enum
+        options: [明显改善, 有所改善, 无变化, 有所加重]
+        required: true
+      - name: side_effects
+        type: text
+        required: false
+    next:
+      - goto: satisfaction_scoring
+
+  - id: satisfaction_scoring
+    prompt: "如果满分10分，您觉得现在症状控制能打几分？生活质量方面呢？"
+    slots:
+      - name: control_score
+        type: int_0_10
+        map_to_5: true # 0-1→0, 2-3→1, 4-5→2, 6-7→3, 8-9→4, 10→5
+        allow_unknown: true # -1 + 说明
+        required: true
+      - name: life_quality_score
+        type: int_0_10
+        map_to_5: true
+        allow_unknown: true
+        required: true
+    next:
+      - goto: programming_info
+
+  - id: programming_info
+    prompt: "术后到现在，大概做过几次程控调参？对调参效果满意吗？"
+    slots:
+      - name: programming_count
+        type: int_or_unknown # -1 + 说明
+        required: true
+      - name: programming_satisfaction
+        type: enum
+        options: [满意, 不满意, 不适用]
+        required: true
+      - name: programming_notes
+        type: text
+        required: false
+    next:
+      - goto: other_factors
+
+  - id: other_factors
+    prompt: "您觉得有没有情绪精神方面的问题？吃药方面有问题吗？"
+    slots:
+      - name: mental_issues
+        type: bool
+        required: false
+      - name: medication_issues
+        type: bool
+        required: false
+      - name: subjective_satisfaction
+        type: multi_select
+        options: [改善达预期, 医院服务好, 程控水平高, 其他]
+        required: false
+      - name: subjective_dissatisfaction
+        type: multi_select
+        options: [预期过高, 未达医生告知, 医院服务差, 程控水平低, 其他]
+        required: false
+    next:
+      - goto: education_info
+
+  - id: education_info
+    prompt: "术前医生有详细说过大概能改善到什么程度吗？出院时有人讲过设备怎么用吗？识别卡的作用您清楚吗？"
+    slots:
+      - name: pre_op_informed
+        type: enum
+        options: [充分告知, 未充分告知, 不记得]
+        required: true
+      - name: device_explained
+        type: enum
+        options: [已讲解清楚, 未讲解, 不记得]
+        required: true
+      - name: id_card_explained
+        type: enum
+        options: [已讲解, 未讲解, 不清楚作用]
+        required: true
+    next:
+      - goto: service_feedback
+
+  - id: service_feedback
+    prompt: "在医院遇到问题时，响应快吗？有特别满意或不满意的地方吗？"
+    slots:
+      - name: response_speed
+        type: enum
+        options: [快速响应, 响应慢, 无问题]
+        required: true
+      - name: special_praise
+        type: text
+        required: false
+      - name: special_complaint
+        type: text
+        required: false
+      - name: hospital_followup
+        type: bool
+        required: false
+    next:
+      - goto: insurance
+
+  - id: insurance
+    prompt: "您用的是什么医保？手术总费用和自费部分大概多少？有买惠民保吗？"
+    slots:
+      - name: insurance_type
+        type: enum
+        options: [职工医保, 居民医保, 新农合, 自费, 其他]
+        required: true
+      - name: insurance_city
+        type: text
+        required: true
+      - name: total_cost
+        type: fuzzy_range
+        required: true
+      - name: self_pay
+        type: fuzzy_range
+        required: true
+      - name: reimbursement_pct
+        type: fuzzy_pct
+        required: false
+      - name: huimin_bao
+        type: bool
+        required: true
+      - name: huimin_bao_amount
+        type: fuzzy_range
+        required: false
+    next:
+      - goto: special_events
+
+  - id: special_events
+    prompt: "还有什么特殊情况需要记录吗？比如设备问题或其他想说的？"
+    slots:
+      - name: device_issues
+        type: multi_select
+        options: [IPG取出, 电极移位, 导线断裂, 感染, 重新手术, 换电池, 无]
+        required: false
+      - name: notes
+        type: text
+        required: false
+    next:
+      - goto: closing
+
+  - id: closing
+    prompt: "感谢您配合随访！后续有问题可以拨打400电话。祝您身体健康！"
+    slots: []
+    terminal: true
+
+  - id: call_failed
+    prompt: "好的，那我们改天再联系。打扰了，再见！"
+    slots: []
+    terminal: true
+    status: "失访"
+
+# =============================================================================
+# Status Inference Rules
+# =============================================================================
+status_rules:
+  - condition: "terminal == true and all_required_filled"
+    status: "已完成"
+  - condition: "device_issues contains 'IPG取出'"
+    status: "已完成-IPG关机/取出"
+  - condition: "patient_deceased_during_call"
+    status: "已完成-身故(随访得知)"
+  - condition: "connection_failed and attempts >= 3"
+    status: "失访"
+
+# =============================================================================
+# Guardrails
+# =============================================================================
+guardrails:
+  vns_no_adjust:
+    trigger: "VNS AND (自行调整 OR 自己调)"
+    response: "这个建议您跟医生确认一下再调整。"
+    action: "record_to_notes"
+
+  no_medical_advice:
+    trigger: "药物 AND (怎么吃 OR 调整剂量 OR 换药)"
+    response: "用药方面建议您跟主治医生详细沟通。"
+    action: "record_to_notes"
+
+# =============================================================================
+# Retry/Fallback Config
+# =============================================================================
+retry:
+  max_attempts: 3
+  fallback_prompt: "抱歉没听清，请用是或不是回答：{simplified_question}"
+  escalate_after: 3

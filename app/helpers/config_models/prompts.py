@@ -6,8 +6,6 @@ from html import escape
 from logging import Logger
 from textwrap import dedent
 
-from azure.ai.inference.models import SystemMessage
-from azure.core.exceptions import HttpResponseError
 from pydantic import BaseModel, TypeAdapter
 
 from app.models.call import CallStateModel
@@ -313,23 +311,21 @@ class LlmModel(BaseModel):
     """
 
     def default_system(self, call: CallStateModel) -> str:
-        from app.helpers.config import CONFIG
-
         return self._format(
             self.default_system_tpl.format(
                 bot_company=call.initiate.bot_company,
                 bot_name=call.initiate.bot_name,
-                bot_phone_number=CONFIG.communication_services.phone_number,
+                bot_phone_number=call.initiate.agent_phone_number,  # 使用 agent_phone_number
                 date=datetime.now(call.tz()).strftime(
                     "%a %d %b %Y, %H:%M (%Z)"
-                ),  # Don't include secs to enhance cache during unit tests. Example: "Mon 15 Jul 2024, 12:43 (CEST)"
+                ),
                 phone_number=call.initiate.phone_number,
             )
         )
 
     def chat_system(
         self, call: CallStateModel, trainings: list[TrainingModel]
-    ) -> list[SystemMessage]:
+    ) -> list[dict]:
         from app.models.message import (
             ActionEnum as MessageActionEnum,
             StyleEnum as MessageStyleEnum,
@@ -352,7 +348,7 @@ class LlmModel(BaseModel):
             call=call,
         )
 
-    def sms_summary_system(self, call: CallStateModel) -> list[SystemMessage]:
+    def sms_summary_system(self, call: CallStateModel) -> list[dict]:
         return self._messages(
             self._format(
                 self.sms_summary_system_tpl,
@@ -371,7 +367,7 @@ class LlmModel(BaseModel):
             call=call,
         )
 
-    def synthesis_system(self, call: CallStateModel) -> list[SystemMessage]:
+    def synthesis_system(self, call: CallStateModel) -> list[dict]:
         return self._messages(
             self._format(
                 self.synthesis_system_tpl,
@@ -388,7 +384,7 @@ class LlmModel(BaseModel):
             call=call,
         )
 
-    def citations_system(self, call: CallStateModel, text: str) -> list[SystemMessage]:
+    def citations_system(self, call: CallStateModel, text: str) -> list[dict]:
         """
         Return the formatted prompt. Prompt is used to add citations to the text, without cluttering the content itself.
 
@@ -406,7 +402,7 @@ class LlmModel(BaseModel):
             call=call,
         )
 
-    def next_system(self, call: CallStateModel) -> list[SystemMessage]:
+    def next_system(self, call: CallStateModel) -> list[dict]:
         return self._messages(
             self._format(
                 self.next_system_tpl,
@@ -453,14 +449,16 @@ class LlmModel(BaseModel):
         # self.logger.debug("Formatted prompt: %s", formatted_prompt)
         return formatted_prompt
 
-    def _messages(self, system: str, call: CallStateModel) -> list[SystemMessage]:
+    def _messages(self, system: str, call: CallStateModel) -> list[dict]:
         messages = [
-            SystemMessage(
-                content=self.default_system(call),
-            ),
-            SystemMessage(
-                content=system,
-            ),
+            {
+                "role": "system",
+                "content": self.default_system(call),
+            },
+            {
+                "role": "system",
+                "content": system,
+            },
         ]
         # self.logger.debug("Messages: %s", messages)
         return messages
@@ -603,24 +601,11 @@ class TtsModel(BaseModel):
         self, prompt_tpls: list[str], call: CallStateModel, **kwargs
     ) -> str:
         """
-        Format the prompt and translate it to the TTS language.
+        Format the prompt (translation removed).
 
-        If the translation fails, the initial prompt is returned.
+        Returns the formatted prompt directly.
         """
-        from app.helpers.translation import (
-            translate_text,
-        )
-
-        initial = self._return(prompt_tpls, **kwargs)
-        translation = None
-        try:
-            translation = await translate_text(
-                initial, self.tts_lang, call.lang.short_code
-            )
-        except HttpResponseError as e:
-            self.logger.warning("Failed to translate TTS prompt: %s", e)
-            pass
-        return translation or initial
+        return self._return(prompt_tpls, **kwargs)
 
     @cached_property
     def logger(self) -> Logger:

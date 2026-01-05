@@ -2,7 +2,7 @@
   "python.analysis.inlayHints.functionReturnTypes": true,
   "python.analysis.inlayHints.variableTypes": true,
   "python.defaultInterpreterPath": ".venv/bin/python",
-  "python.languageServer": "Pylance",
+  "python.languageServer": "None",
   "ruff.nativeServer": "on",
   "[python]": {
     "editor.formatOnSave": true,
@@ -31,5 +31,7 @@
     "editor.defaultFormatter": "ms-azuretools.vscode-bicep",
     "editor.formatOnPaste": true,
     "editor.formatOnSave": true
-  }
+  },
+  "cursorpyright.analysis.inlayHints.functionReturnTypes": true,
+  "cursorpyright.analysis.inlayHints.variableTypes": true
 }

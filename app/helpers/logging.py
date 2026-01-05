@@ -1,3 +1,10 @@
+"""
+日志配置
+
+使用 structlog 进行结构化日志记录。
+"""
+
+import os
 from logging import Logger, _nameToLevel, basicConfig
 
 from structlog import (
@@ -15,35 +22,30 @@ from structlog.processors import (
 )
 from structlog.stdlib import PositionalArgumentsFormatter
 
-from app.helpers.config import CONFIG
+# 从环境变量获取日志级别，默认 INFO
+SYS_LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING")
+APP_LOG_LEVEL = os.environ.get("APP_LOG_LEVEL", "INFO")
 
-# Default logging level for all the dependencies
-basicConfig(level=CONFIG.monitoring.logging.sys_level.value)
+# 配置系统日志级别
+basicConfig(level=SYS_LOG_LEVEL.upper())
 
-# Configure application console logging
+# 配置应用日志
 configure_once(
     cache_logger_on_first_use=True,
     context_class=dict,
     wrapper_class=make_filtering_bound_logger(
-        _nameToLevel[CONFIG.monitoring.logging.app_level.value]
+        _nameToLevel.get(APP_LOG_LEVEL.upper(), 20)  # 20 = INFO
     ),
     processors=[
-        # Add contextvars support
         merge_contextvars,
-        # Add log level
         add_log_level,
-        # Enable %s-style formatting
         PositionalArgumentsFormatter(),
-        # Add timestamp
         TimeStamper(fmt="iso", utc=True),
-        # Add exceptions info
         StackInfoRenderer(),
-        # Decode Unicode to str
         UnicodeDecoder(),
-        # Pretty printing in a terminal session
         ConsoleRenderer(),
     ],
 )
 
-# Framework does not exactly expose Logger, but that's easier to work with
+# 导出 logger 实例
 logger: Logger = structlog_get_logger("call-center-ai")

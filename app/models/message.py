@@ -1,16 +1,14 @@
+"""
+消息模型
+
+定义对话中的消息结构。
+"""
+
 import re
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
-from azure.ai.inference.models import (
-    AssistantMessage,
-    ChatCompletionsToolCall,
-    ChatRequestMessage,
-    FunctionCall,
-    StreamingChatResponseToolCallUpdate,
-    ToolMessage,
-    UserMessage,
-)
 from pydantic import BaseModel, Field, field_validator
 
 _FUNC_NAME_SANITIZER_R = r"[^a-zA-Z0-9_-]"
@@ -19,41 +17,36 @@ _MESSAGE_STYLE_R = r"(?:style=*([a-z_]*))? *(.*)"
 
 
 class StyleEnum(str, Enum):
-    """
-    Voice styles the Azure AI Speech Service supports.
-
-    Doc:
-    - Speaking styles: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#use-speaking-styles-and-roles
-    - Support by language: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts#voice-styles-and-roles
-    """
-
+    """语音风格"""
     CHEERFUL = "cheerful"
     NONE = "none"
-    """This is not a valid style, but we use it in the code to indicate no style."""
     SAD = "sad"
 
 
 class ActionEnum(str, Enum):
+    """消息动作类型"""
     CALL = "call"
-    """User called the assistant."""
+    """用户发起通话"""
     HANGUP = "hangup"
-    """User hung up the call."""
+    """用户挂断"""
     SMS = "sms"
-    """User sent an SMS."""
+    """短信"""
     TALK = "talk"
-    """User sent a message."""
+    """对话消息"""
 
 
 class PersonaEnum(str, Enum):
+    """消息角色"""
     ASSISTANT = "assistant"
-    """Represents an AI assistant."""
+    """AI 助手"""
     HUMAN = "human"
-    """Represents a human user."""
+    """人类用户"""
     TOOL = "tool"
-    """Not used but deprecated, kept for backward compatibility."""
+    """工具调用结果"""
 
 
 class ToolModel(BaseModel):
+    """工具调用模型"""
     content: str = ""
     function_arguments: str = ""
     function_name: str = ""
@@ -61,44 +54,37 @@ class ToolModel(BaseModel):
 
     @property
     def is_openai_valid(self) -> bool:
-        """
-        Check if the tool model is valid for OpenAI.
-
-        The model is valid if it has a tool ID and a function name.
-        """
+        """检查是否为有效的 OpenAI 工具调用"""
         return bool(self.tool_id and self.function_name)
 
-    def add_delta(self, delta: StreamingChatResponseToolCallUpdate) -> "ToolModel":
-        """
-        Update the tool model with a delta.
-
-        This model will be updated with the delta's values from the streaming API.
-        """
-        if delta.id:
+    def add_delta(self, delta: Any) -> "ToolModel":
+        """更新工具调用（流式响应）"""
+        if hasattr(delta, 'id') and delta.id:
             self.tool_id = delta.id
-        if delta.function.name:
-            self.function_name = delta.function.name
-        if delta.function.arguments:
-            self.function_arguments += delta.function.arguments
+        if hasattr(delta, 'function'):
+            if hasattr(delta.function, 'name') and delta.function.name:
+                self.function_name = delta.function.name
+            if hasattr(delta.function, 'arguments') and delta.function.arguments:
+                self.function_arguments += delta.function.arguments
         return self
 
-    def to_openai(self) -> ChatCompletionsToolCall:
-        """
-        Convert the tool model to an OpenAI tool call.
-        """
-        return ChatCompletionsToolCall(
-            id=self.tool_id,
-            function=FunctionCall(
-                arguments=self.function_arguments,
-                name="-".join(
+    def to_openai(self) -> dict:
+        """转换为 OpenAI 格式"""
+        sanitized_name = "-".join(
                     re.sub(
                         _FUNC_NAME_SANITIZER_R,
                         "-",
                         self.function_name,
                     ).split("-")
-                ),  # Sanitize with dashes then deduplicate dashes, backward compatibility with old models
-            ),
         )
+        return {
+            "id": self.tool_id,
+            "type": "function",
+            "function": {
+                "name": sanitized_name,
+                "arguments": self.function_arguments,
+            }
+        }
 
     def __hash__(self) -> int:
         return self.tool_id.__hash__()
@@ -110,9 +96,10 @@ class ToolModel(BaseModel):
 
 
 class MessageModel(BaseModel):
-    # Immutable fields
+    """消息模型"""
+    # 不可变字段
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
-    # Editable fields
+    # 可编辑字段
     action: ActionEnum = ActionEnum.TALK
     content: str
     lang_short_code: str | None = None
@@ -122,87 +109,62 @@ class MessageModel(BaseModel):
 
     async def translate(self, target_short_code: str) -> "MessageModel":
         """
-        Translate the message to a target language.
-
-        A copy of the model is returned with the translated content.
+        翻译消息（简化版，暂不支持翻译）
+        
+        返回消息副本。
         """
-        from app.helpers.translation import translate_text
-
-        # Work on a copy to avoid modifying the original model in the database
-        copy = self.model_copy()
-
-        # Skip if no language is set
-        if not self.lang_short_code:
-            return copy
-
-        # Apply translation
-        translation = await translate_text(
-            source_lang=self.lang_short_code,
-            target_lang=target_short_code,
-            text=self.content,
-        )
-        if translation:
-            copy.content = translation
-            copy.lang_short_code = target_short_code
-
-        return copy
+        # 简化实现：直接返回副本，不进行翻译
+        return self.model_copy()
 
     @field_validator("created_at")
     @classmethod
     def _validate_created_at(cls, created_at: datetime) -> datetime:
-        """
-        Ensure the created_at field is timezone-aware.
-
-        Backward compatibility with models created before the timezone was added. All dates require the same timezone to be compared.
-        """
+        """确保时间戳有时区信息"""
         if not created_at.tzinfo:
             return created_at.replace(tzinfo=UTC)
         return created_at
 
-    def to_openai(
-        self,
-    ) -> list[ChatRequestMessage]:
-        """
-        Convert the message model to an OpenAI message.
-
-        Tools are validated before being added to the message, invalid ones are discarded.
-        """
-        # Removing newlines from the content to avoid hallucinations issues with GPT-4 Turbo
+    def to_openai(self) -> list[dict]:
+        """转换为 OpenAI 消息格式"""
         content = " ".join([line.strip() for line in self.content.splitlines()])
 
-        # Init content for human persona
+        # 用户消息
         if self.persona == PersonaEnum.HUMAN:
             return [
-                UserMessage(
-                    content=f"action={self.action.value} {content}",
-                )
+                {
+                    "role": "user",
+                    "content": f"action={self.action.value} {content}",
+                }
             ]
 
-        # Init content for assistant persona
+        # 助手消息（无工具调用）
         if self.persona == PersonaEnum.ASSISTANT:
             if not self.tool_calls:
                 return [
-                    AssistantMessage(
-                        content=f"action={self.action.value} style={self.style.value} {content}",
-                    )
+                    {
+                        "role": "assistant",
+                        "content": f"action={self.action.value} style={self.style.value} {content}",
+                    }
                 ]
 
-        # Add tools
+        # 助手消息（有工具调用）
         valid_tools = [
             tool_call for tool_call in self.tool_calls if tool_call.is_openai_valid
         ]
         res = []
         res.append(
-            AssistantMessage(
-                content=f"action={self.action.value} style={self.style.value} {content}",
-                tool_calls=[tool_call.to_openai() for tool_call in valid_tools],
-            )
+            {
+                "role": "assistant",
+                "content": f"action={self.action.value} style={self.style.value} {content}",
+                "tool_calls": [tool_call.to_openai() for tool_call in valid_tools],
+            }
         )
         res.extend(
-            ToolMessage(
-                content=tool_call.content,
-                tool_call_id=tool_call.tool_id,
-            )
+            {
+                "role": "tool",
+                "content": tool_call.content,
+                "tool_call_id": tool_call.tool_id,
+            }
             for tool_call in valid_tools
             if tool_call.content
         )
@@ -210,62 +172,40 @@ class MessageModel(BaseModel):
 
 
 def _filter_action(text: str) -> str:
-    """
-    Remove action from content.
-
-    AI often adds it by mistake event if explicitly asked not to.
-
-    Example:
-    - Input: "action=talk Hello!"
-    - Output: "Hello!"
-    """
-    # TODO: Use JSON as LLM response instead of using a regex to parse the text
+    """移除 action 标记"""
     res = re.match(_MESSAGE_ACTION_R, text)
     if not res:
         return text
     try:
         return res.group(2) or ""
-    # Regex failed, return original text
     except ValueError:
         return text
 
 
 def _filter_content(text: str) -> str:
-    """
-    Remove content from text.
-
-    AI often adds it by mistake event if explicitly asked not to.
-
-    Example:
-    - Input: "content=Hello!"
-    - Output: "Hello!"
-    """
+    """移除 content= 前缀"""
     return text.replace("content=", "")
 
 
 def extract_message_style(text: str) -> tuple[StyleEnum, str]:
     """
-    Detect the style of a message and extract it from the text.
-
-    Example:
-    - Input: "style=cheerful Hello!"
-    - Output: (StyleEnum.CHEERFUL, "Hello!")
+    提取消息风格
+    
+    示例:
+    - 输入: "style=cheerful Hello!"
+    - 输出: (StyleEnum.CHEERFUL, "Hello!")
     """
-    # Apply hallucination filters
     text = _filter_action(text)
     text = _filter_content(text)
 
-    # Extract style
     default_style = StyleEnum.NONE
     res = re.match(_MESSAGE_STYLE_R, text)
     if not res:
         return default_style, text
     try:
         return (
-            StyleEnum(res.group(1)),  # style
-            (res.group(2) or ""),  # content
+            StyleEnum(res.group(1)),
+            (res.group(2) or ""),
         )
-
-    # Regex failed, return original text
     except ValueError:
         return default_style, text

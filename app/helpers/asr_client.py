@@ -1,0 +1,199 @@
+"""
+阿里云 Paraformer 实时语音识别客户端
+
+基于 DashScope SDK 实现，使用官方 Recognition 类。
+
+参考文档：
+https://help.aliyun.com/zh/model-studio/paraformer-real-time-speech-recognition-python-sdk
+
+环境变量：
+- DASHSCOPE_API_KEY: 百炼平台 API Key（必需）
+"""
+
+import logging
+from os import environ
+
+import dashscope
+from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
+
+_logger = logging.getLogger(__name__)
+
+
+class ParaformerError(Exception):
+    """Paraformer ASR 错误"""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(f"[{code}] {message}")
+
+
+class _ResultCallback(RecognitionCallback):
+    """识别结果回调"""
+
+    def __init__(self):
+        self.results: list[str] = []
+        self.final_text: str = ""
+        self.error: Exception | None = None
+        self._completed = False
+
+    def on_open(self) -> None:
+        _logger.debug("ASR connection opened")
+
+    def on_close(self) -> None:
+        _logger.debug("ASR connection closed")
+        self._completed = True
+
+    def on_event(self, result: RecognitionResult) -> None:
+        """处理识别结果"""
+        sentence = result.get_sentence()
+        if sentence and "text" in sentence:
+            text = sentence["text"]
+            is_end = RecognitionResult.is_sentence_end(sentence)
+
+            _logger.debug("ASR result: %s (final=%s)", text, is_end)
+
+            if is_end:
+                # 句子结束，保存完整结果
+                self.final_text = text
+                self.results.append(text)
+            else:
+                # 中间结果
+                self.final_text = text
+
+    def on_error(self, result: RecognitionResult) -> None:
+        """处理错误"""
+        error_msg = str(result)
+        _logger.error("ASR error: %s", error_msg)
+        self.error = ParaformerError("ASR_ERROR", error_msg)
+        self._completed = True
+
+    def on_complete(self) -> None:
+        """识别完成"""
+        _logger.debug(
+            "ASR completed, final text: %s",
+            self.final_text[:50] if self.final_text else "(empty)",
+        )
+        self._completed = True
+
+    @property
+    def is_completed(self) -> bool:
+        return self._completed
+
+
+def recognize_audio_sync(
+    audio_data: bytes,
+    sample_rate: int = 16000,
+    format: str = "pcm",
+    model: str = "paraformer-realtime-v2",
+    language: str = "zh",
+    hot_words: list | None = None,
+) -> str | None:
+    """
+    同步识别音频（阻塞调用）
+
+    Args:
+        audio_data: PCM 音频数据 (16bit mono)
+        sample_rate: 采样率
+        format: 音频格式
+        model: 模型名称
+        language: 语言
+        hot_words: 热词列表，格式 [{"text": "词语", "weight": 5}, ...]
+
+    Returns:
+        识别出的文字，失败返回 None
+    """
+    api_key = environ.get("DASHSCOPE_API_KEY")
+    if not api_key:
+        raise ValueError("DASHSCOPE_API_KEY 环境变量未设置")
+
+    # 设置 API Key
+    dashscope.api_key = api_key
+
+    callback = _ResultCallback()
+
+    # 创建识别器
+    recognition = Recognition(
+        model=model,
+        format=format,
+        sample_rate=sample_rate,
+        callback=callback,
+    )
+
+    # 配置语言和热词
+    start_kwargs = {}
+    if model in ["paraformer-realtime-v2", "paraformer-realtime-8k-v2"]:
+        start_kwargs["language_hints"] = [language]
+
+    if hot_words:
+        start_kwargs["hotwords"] = hot_words
+        _logger.debug("Using %d hot words", len(hot_words))
+
+    recognition.start(**start_kwargs)
+
+    _logger.debug("Sending %d bytes audio data (rate=%d)", len(audio_data), sample_rate)
+
+    # 分块发送音频（大块减少网络往返）
+    chunk_size = sample_rate * 2  # 500ms 的数据，更大的块更快
+    for i in range(0, len(audio_data), chunk_size):
+        chunk = audio_data[i : i + chunk_size]
+        recognition.send_audio_frame(chunk)
+
+    # 结束识别
+    recognition.stop()
+
+    # 检查错误
+    if callback.error:
+        raise callback.error
+
+    return callback.final_text or None
+
+
+class ParaformerClient:
+    """
+    Paraformer 语音识别客户端
+
+    封装 DashScope SDK，提供简洁的接口。
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "paraformer-realtime-v2",
+    ):
+        self._api_key = api_key or environ.get("DASHSCOPE_API_KEY")
+        if not self._api_key:
+            raise ValueError(
+                "DASHSCOPE_API_KEY 环境变量未设置！\n"
+                "请在 .env 文件中添加：DASHSCOPE_API_KEY=sk-your-api-key"
+            )
+
+        self._model = model
+        dashscope.api_key = self._api_key
+
+    def recognize(
+        self,
+        audio_data: bytes,
+        sample_rate: int = 16000,
+        format: str = "pcm",
+        language: str = "zh",
+    ) -> str | None:
+        """
+        识别音频
+
+        Args:
+            audio_data: PCM 音频数据
+            sample_rate: 采样率
+            format: 音频格式
+            language: 语言
+
+        Returns:
+            识别出的文字
+        """
+        return recognize_audio_sync(
+            audio_data=audio_data,
+            sample_rate=sample_rate,
+            format=format,
+            model=self._model,
+            language=language,
+        )
