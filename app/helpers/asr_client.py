@@ -81,6 +81,120 @@ class _ResultCallback(RecognitionCallback):
         return self._completed
 
 
+class PersistentASR:
+    """
+    持久化 ASR 连接 - 复用 WebSocket 避免每次握手开销
+
+    使用方法:
+    ```python
+    asr = PersistentASR(hot_words=[...])
+    asr.start()  # 建立连接
+
+    # 每次识别复用连接
+    text = asr.recognize(audio_data)
+
+    asr.stop()  # 结束时关闭
+    ```
+    """
+
+    def __init__(
+        self,
+        model: str = "paraformer-realtime-v2",
+        sample_rate: int = 16000,
+        language: str = "zh",
+        hot_words: list | None = None,
+    ):
+        self._model = model
+        self._sample_rate = sample_rate
+        self._language = language
+        self._hot_words = hot_words
+        self._recognition = None
+        self._callback = None
+        self._is_started = False
+
+        api_key = environ.get("DASHSCOPE_API_KEY")
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY 环境变量未设置")
+        dashscope.api_key = api_key
+
+    def start(self) -> None:
+        """启动持久连接"""
+        import time
+
+        t0 = time.time()
+
+        if self._is_started:
+            return
+
+        self._callback = _ResultCallback()
+        self._recognition = Recognition(
+            model=self._model,
+            format="pcm",
+            sample_rate=self._sample_rate,
+            callback=self._callback,
+        )
+
+        start_kwargs = {}
+        if self._model in ["paraformer-realtime-v2", "paraformer-realtime-8k-v2"]:
+            start_kwargs["language_hints"] = [self._language]
+        if self._hot_words:
+            start_kwargs["hotwords"] = self._hot_words
+
+        self._recognition.start(**start_kwargs)
+        self._is_started = True
+        _logger.info("[PersistentASR] Started in %.0fms", (time.time() - t0) * 1000)
+
+    def recognize(self, audio_data: bytes) -> str | None:
+        """识别音频 - 复用已有连接"""
+        import time
+
+        t0 = time.time()
+
+        if not self._is_started:
+            self.start()
+
+        # Reset callback for new recognition
+        self._callback.final_text = ""
+        self._callback.results = []
+        self._callback._completed = False
+
+        # Send audio in small chunks
+        chunk_size = int(self._sample_rate * 0.1) * 2  # 100ms
+        for i in range(0, len(audio_data), chunk_size):
+            chunk = audio_data[i : i + chunk_size]
+            self._recognition.send_audio_frame(chunk)
+
+        # Wait briefly for processing
+        import time as t
+
+        t.sleep(0.1)  # Give ASR time to process
+
+        result = self._callback.final_text
+        total_ms = (time.time() - t0) * 1000
+        _logger.info(
+            "[PersistentASR] Recognized in %.0fms: %s",
+            total_ms,
+            result[:30] if result else "(empty)",
+        )
+
+        return result or None
+
+    def stop(self) -> None:
+        """停止连接"""
+        if self._recognition and self._is_started:
+            try:
+                self._recognition.stop()
+            except Exception as e:
+                _logger.warning("[PersistentASR] Stop error: %s", e)
+        self._is_started = False
+        self._recognition = None
+        _logger.info("[PersistentASR] Stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_started
+
+
 def recognize_audio_sync(
     audio_data: bytes,
     sample_rate: int = 16000,

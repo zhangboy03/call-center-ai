@@ -190,6 +190,9 @@ async def websocket_endpoint(websocket: WebSocket):
     MIN_SPEECH_DURATION = 0.3  # Minimum speech duration to process
     ENERGY_THRESHOLD = 500  # RMS threshold for speech
 
+    # === Persistent ASR for connection reuse ===
+    persistent_asr = None  # Will be initialized with hot_words on first use
+
     def compute_rms(audio_bytes: bytes) -> float:
         """Compute RMS energy of audio (16-bit PCM)"""
         import struct
@@ -674,87 +677,78 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 def recognize_audio(audio_data: bytes) -> str:
-    """ASR - 使用已验证的 asr_client，带热词增强"""
+    """ASR - 使用 PersistentASR 复用连接，带热词增强"""
     try:
-        from app.helpers.asr_client import recognize_audio_sync
+        from app.helpers.asr_client import PersistentASR
 
-        # 热词列表 - 从 knowledge_base.json 提取的领域专用词
-        # 权重 1-5，权重越高识别概率越高
-        hot_words = [
-            # 产品型号
-            {"text": "DBS", "weight": 5},
-            {"text": "R802", "weight": 5},
-            {"text": "R801", "weight": 5},
-            {"text": "C701", "weight": 5},
-            {"text": "C702", "weight": 5},
-            {"text": "IPG", "weight": 4},
-            {"text": "G102R", "weight": 4},
-            {"text": "G106R", "weight": 4},
-            # 产品术语
-            {"text": "脑起搏器", "weight": 5},
-            {"text": "脑深部电刺激", "weight": 5},
-            {"text": "刺激器", "weight": 4},
-            {"text": "程控器", "weight": 5},
-            {"text": "充电器", "weight": 4},
-            {"text": "程控", "weight": 5},
-            {"text": "远程程控", "weight": 5},
-            {"text": "延伸导线", "weight": 4},
-            {"text": "电极", "weight": 4},
-            # 品牌和App
-            {"text": "品驰", "weight": 5},
-            {"text": "嘉医有品", "weight": 5},  # 患者用的App
-            {"text": "品驰医疗", "weight": 5},
-            {"text": "品驰中台", "weight": 4},  # 管理后台
-            # 疾病和医学术语
-            {"text": "帕金森", "weight": 5},
-            {"text": "帕金森病", "weight": 5},
-            {"text": "肌张力障碍", "weight": 4},
-            {"text": "震颤", "weight": 4},
-            {"text": "僵直", "weight": 4},
-            # 医保和费用
-            {"text": "医保", "weight": 4},
-            {"text": "惠民保", "weight": 5},
-            {"text": "识别卡", "weight": 5},
-            {"text": "随访", "weight": 4},
-            # 操作术语
-            {"text": "充电日志", "weight": 4},
-            {"text": "起搏器自诊", "weight": 4},
-            {"text": "开关刺激", "weight": 4},
-            # From knowledge_base.json - daily life and post-op
-            {"text": "日常生活", "weight": 3},
-            {"text": "术后医疗", "weight": 4},
-            {"text": "体外产品", "weight": 4},
-            {"text": "体内产品", "weight": 4},
-            {"text": "质保", "weight": 4},
-            {"text": "安检门", "weight": 3},
-            {"text": "磁铁", "weight": 3},
-            {"text": "寿命", "weight": 3},
-            {"text": "开机", "weight": 4},
-            {"text": "关机", "weight": 4},
-            # Symptom related
-            {"text": "震颤", "weight": 5},
-            {"text": "僵直", "weight": 4},
-            {"text": "手抖", "weight": 4},
-            {"text": "不良反应", "weight": 4},
-            {"text": "副作用", "weight": 4},
-            # Scores and feedback
-            {"text": "满分", "weight": 3},
-            {"text": "打分", "weight": 4},
-            {"text": "满意", "weight": 4},
-            {"text": "不满意", "weight": 4},
-        ]
+        # Module-level singleton for connection reuse
+        global _persistent_asr
+        if "_persistent_asr" not in globals() or _persistent_asr is None:
+            # 热词列表 - 从 knowledge_base.json 提取的领域专用词
+            hot_words = [
+                # 产品型号
+                {"text": "DBS", "weight": 5},
+                {"text": "R802", "weight": 5},
+                {"text": "R801", "weight": 5},
+                {"text": "C701", "weight": 5},
+                {"text": "C702", "weight": 5},
+                {"text": "IPG", "weight": 4},
+                {"text": "G102R", "weight": 4},
+                {"text": "G106R", "weight": 4},
+                # 产品术语
+                {"text": "脑起搏器", "weight": 5},
+                {"text": "脑深部电刺激", "weight": 5},
+                {"text": "刺激器", "weight": 4},
+                {"text": "程控器", "weight": 5},
+                {"text": "充电器", "weight": 4},
+                {"text": "程控", "weight": 5},
+                {"text": "远程程控", "weight": 5},
+                {"text": "延伸导线", "weight": 4},
+                {"text": "电极", "weight": 4},
+                # 品牌和App
+                {"text": "品驰", "weight": 5},
+                {"text": "嘉医有品", "weight": 5},
+                {"text": "品驰医疗", "weight": 5},
+                {"text": "品驰中台", "weight": 4},
+                # 疾病和医学术语
+                {"text": "帕金森", "weight": 5},
+                {"text": "帕金森病", "weight": 5},
+                {"text": "肌张力障碍", "weight": 4},
+                {"text": "震颤", "weight": 5},
+                {"text": "僵直", "weight": 4},
+                {"text": "手抖", "weight": 4},
+                # 医保和费用
+                {"text": "医保", "weight": 4},
+                {"text": "惠民保", "weight": 5},
+                {"text": "识别卡", "weight": 5},
+                {"text": "随访", "weight": 4},
+                # 操作术语
+                {"text": "充电日志", "weight": 4},
+                {"text": "起搏器自诊", "weight": 4},
+                {"text": "开关刺激", "weight": 4},
+                {"text": "开机", "weight": 4},
+                {"text": "关机", "weight": 4},
+                # Scores and feedback
+                {"text": "满分", "weight": 3},
+                {"text": "打分", "weight": 4},
+                {"text": "满意", "weight": 4},
+                {"text": "不满意", "weight": 4},
+            ]
+            _persistent_asr = PersistentASR(hot_words=hot_words)
+            _persistent_asr.start()
+            logger.info("[ASR] Initialized PersistentASR connection")
 
-        result = recognize_audio_sync(
-            audio_data=audio_data,
-            sample_rate=16000,
-            format="pcm",
-            model="paraformer-realtime-v2",
-            language="zh",
-            hot_words=hot_words,  # 传入热词
-        )
+        result = _persistent_asr.recognize(audio_data)
         return result or ""
     except Exception as e:
         logger.error("ASR error: %s", e)
+        # Reset on error
+        if "_persistent_asr" in globals():
+            try:
+                _persistent_asr.stop()
+            except:
+                pass
+            globals()["_persistent_asr"] = None
         return ""
 
 
