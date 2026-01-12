@@ -485,13 +485,15 @@ async def websocket_endpoint(websocket: WebSocket):
             full_response += token
             sentence_buffer += token
 
-            for punct in ["。", "！", "？", ".", "!", "?"]:
+            # OPTIMIZATION: Start TTS on comma OR period (faster first audio)
+            # Comma chunks are ~5-10 chars, spoken while LLM continues
+            for punct in ["，", "。", "！", "？", ",", ".", "!", "?"]:
                 if punct in sentence_buffer:
                     parts = sentence_buffer.split(punct, 1)
                     sentence = parts[0] + punct
                     sentence_buffer = parts[1] if len(parts) > 1 else ""
 
-                    if sentence.strip():
+                    if sentence.strip() and len(sentence) > 2:  # Min 2 chars
                         t_sentence = time.time()
                         logger.info(
                             "[LLM句子完成] %.2fs: %s", t_sentence - t1, sentence[:20]
