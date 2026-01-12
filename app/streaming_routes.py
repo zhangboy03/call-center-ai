@@ -186,7 +186,7 @@ async def websocket_endpoint(websocket: WebSocket):
     audio_buffer = bytearray()
     last_speech_time = time.time()
     is_user_speaking = False
-    SILENCE_THRESHOLD = 0.4  # Reduced from 0.6s for faster response
+    SILENCE_THRESHOLD = 0.6  # User requested 0.6s for word completion
     MIN_SPEECH_DURATION = 0.3  # Minimum speech duration to process
     ENERGY_THRESHOLD = 500  # RMS threshold for speech
 
@@ -718,6 +718,28 @@ def recognize_audio(audio_data: bytes) -> str:
             {"text": "充电日志", "weight": 4},
             {"text": "起搏器自诊", "weight": 4},
             {"text": "开关刺激", "weight": 4},
+            # From knowledge_base.json - daily life and post-op
+            {"text": "日常生活", "weight": 3},
+            {"text": "术后医疗", "weight": 4},
+            {"text": "体外产品", "weight": 4},
+            {"text": "体内产品", "weight": 4},
+            {"text": "质保", "weight": 4},
+            {"text": "安检门", "weight": 3},
+            {"text": "磁铁", "weight": 3},
+            {"text": "寿命", "weight": 3},
+            {"text": "开机", "weight": 4},
+            {"text": "关机", "weight": 4},
+            # Symptom related
+            {"text": "震颤", "weight": 5},
+            {"text": "僵直", "weight": 4},
+            {"text": "手抖", "weight": 4},
+            {"text": "不良反应", "weight": 4},
+            {"text": "副作用", "weight": 4},
+            # Scores and feedback
+            {"text": "满分", "weight": 3},
+            {"text": "打分", "weight": 4},
+            {"text": "满意", "weight": 4},
+            {"text": "不满意", "weight": 4},
         ]
 
         result = recognize_audio_sync(
