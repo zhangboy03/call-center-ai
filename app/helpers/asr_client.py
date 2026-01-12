@@ -88,9 +88,10 @@ def recognize_audio_sync(
     model: str = "paraformer-realtime-v2",
     language: str = "zh",
     hot_words: list | None = None,
+    timeout: float = 3.0,  # Max wait time for recognition
 ) -> str | None:
     """
-    同步识别音频（阻塞调用）
+    同步识别音频（阻塞调用）- 优化版
 
     Args:
         audio_data: PCM 音频数据 (16bit mono)
@@ -99,10 +100,15 @@ def recognize_audio_sync(
         model: 模型名称
         language: 语言
         hot_words: 热词列表，格式 [{"text": "词语", "weight": 5}, ...]
+        timeout: 最大等待时间（秒）
 
     Returns:
         识别出的文字，失败返回 None
     """
+    import time
+
+    t_start = time.time()
+
     api_key = environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         raise ValueError("DASHSCOPE_API_KEY 环境变量未设置")
@@ -129,24 +135,48 @@ def recognize_audio_sync(
         start_kwargs["hotwords"] = hot_words
         _logger.debug("Using %d hot words", len(hot_words))
 
-    recognition.start(**start_kwargs)
+    try:
+        recognition.start(**start_kwargs)
+        t_connected = time.time()
+        _logger.debug("[ASR] Connected in %.2fms", (t_connected - t_start) * 1000)
 
-    _logger.debug("Sending %d bytes audio data (rate=%d)", len(audio_data), sample_rate)
+        # 分块发送音频 - 小块减少延迟
+        chunk_size = (
+            int(sample_rate * 0.1) * 2
+        )  # 100ms chunks (16-bit = 2 bytes per sample)
+        for i in range(0, len(audio_data), chunk_size):
+            chunk = audio_data[i : i + chunk_size]
+            recognition.send_audio_frame(chunk)
 
-    # 分块发送音频（大块减少网络往返）
-    chunk_size = sample_rate * 2  # 500ms 的数据，更大的块更快
-    for i in range(0, len(audio_data), chunk_size):
-        chunk = audio_data[i : i + chunk_size]
-        recognition.send_audio_frame(chunk)
+        t_sent = time.time()
+        _logger.debug(
+            "[ASR] Audio sent in %.2fms (%d bytes)",
+            (t_sent - t_connected) * 1000,
+            len(audio_data),
+        )
 
-    # 结束识别
-    recognition.stop()
+        # 结束识别
+        recognition.stop()
 
-    # 检查错误
-    if callback.error:
-        raise callback.error
+        t_done = time.time()
+        total_ms = (t_done - t_start) * 1000
+        _logger.info(
+            "[ASR] Total: %.0fms, result: %s",
+            total_ms,
+            callback.final_text[:30] if callback.final_text else "(empty)",
+        )
 
-    return callback.final_text or None
+        # 检查错误
+        if callback.error:
+            raise callback.error
+
+        return callback.final_text or None
+
+    except Exception as e:
+        _logger.error(
+            "[ASR] Error: %s (after %.0fms)", e, (time.time() - t_start) * 1000
+        )
+        return None
 
 
 class ParaformerClient:
