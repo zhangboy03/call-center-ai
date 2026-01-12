@@ -91,6 +91,11 @@ class TurnEvent:
     missing_hint: str = ""
     system_prompt_hash: str = ""
 
+    # SOP Step Tracking (Phase 2A)
+    current_step_id: str = ""  # e.g., "intro", "symptom_discussion", etc.
+    step_transition: Optional[str] = None  # e.g., "intro -> symptom_discussion"
+    sop_retry_count: int = 0
+
     # Latencies (ms)
     asr_latency_ms: int = 0
     rag_latency_ms: int = 0
@@ -138,6 +143,11 @@ class TurnEvent:
                 "llm_first_token": self.llm_first_token_ms,
                 "llm_total": self.llm_total_ms,
                 "tts_total": self.tts_total_ms,
+            },
+            "sop": {
+                "current_step": self.current_step_id,
+                "transition": self.step_transition,
+                "retry_count": self.sop_retry_count,
             },
             "ai_response": self.ai_response[:100] + "..."
             if len(self.ai_response) > 100

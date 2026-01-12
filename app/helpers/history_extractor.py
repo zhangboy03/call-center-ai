@@ -54,7 +54,7 @@ REQUIRED_INFO = [
         "id": "life_quality_score",
         "question": "生活质量打分（0-10）",
         "type": "int_0_10",
-        "required": False,
+        "required": True,  # Aligned with sop_schema.yaml
     },
     {
         "id": "programming_count",
@@ -66,7 +66,7 @@ REQUIRED_INFO = [
         "id": "programming_satisfaction",
         "question": "程控效果满意度",
         "type": "enum",
-        "options": ["满意", "一般", "不满意"],
+        "options": ["满意", "不满意", "不适用"],  # Aligned with sop_schema.yaml
         "required": True,
     },
     {
@@ -105,7 +105,7 @@ REQUIRED_INFO = [
         "id": "id_card_explained",
         "question": "识别卡作用是否清楚",
         "type": "enum",
-        "options": ["清楚", "不清楚"],
+        "options": ["清楚", "不清楚"],  # User prefers simpler options
         "required": True,
     },
     {

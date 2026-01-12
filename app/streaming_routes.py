@@ -31,6 +31,9 @@ from app.helpers.observability import (
     log_turn_event,
 )
 
+# Phase 2A: SOPEngine for step tracking (observability only, no behavior change)
+from app.helpers.sop_engine import SOPEngine
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/streaming", tags=["streaming"])
@@ -177,6 +180,18 @@ async def websocket_endpoint(websocket: WebSocket):
     # Phase 0: Turn counter for tracing
     turn_counter = [0]  # Use list to allow mutation in nested function
 
+    # Phase 2A: SOPEngine for step tracking (observability only)
+    # Initialize but do NOT use for control flow - just track current_step_id
+    sop_engine = SOPEngine(
+        call_id=call_id,
+        patient_id=patient_id,
+        product_line=product_line,
+        redis_client=redis_client,
+    )
+    logger.info(
+        f"[SOP-Trace] Initialized SOPEngine, starting step: {sop_engine.state.current_step}"
+    )
+
     # === Simple VAD with audio buffer (proven working approach) ===
     audio_buffer = bytearray()
     last_speech_time = time.time()
@@ -254,6 +269,9 @@ async def websocket_endpoint(websocket: WebSocket):
             call_id=call_id,
             turn_id=turn_counter[0],
             user_text=user_text,
+            # Phase 2A: Track current SOP step
+            current_step_id=sop_engine.state.current_step,
+            sop_retry_count=sop_engine.state.retry_count,
         )
 
         await send_msg("user_text", text=user_text)
@@ -536,6 +554,23 @@ async def websocket_endpoint(websocket: WebSocket):
         turn_event.llm_total_ms = int((time.time() - t1) * 1000)
         if first_token_time:
             turn_event.llm_first_token_ms = int((first_token_time - t1) * 1000)
+
+        # Phase 2A: Track step transitions (observability only, no behavior change)
+        # Update SOP state based on extraction, but don't use for control flow
+        old_step = sop_engine.state.current_step
+        try:
+            # Sync extracted slots to SOPEngine for step inference
+            if cached_extraction.get("extracted"):
+                sop_engine.state.slots.update(cached_extraction["extracted"])
+            # Let SOPEngine infer step transition
+            sop_engine.process_response(user_text, ai_response=full_response)
+            new_step = sop_engine.state.current_step
+            if old_step != new_step:
+                turn_event.step_transition = f"{old_step} -> {new_step}"
+                logger.info(f"[SOP-Trace] Step transition: {old_step} -> {new_step}")
+        except Exception as e:
+            logger.warning(f"[SOP-Trace] Step tracking error (non-fatal): {e}")
+
         log_turn_event(turn_event)
 
     try:
