@@ -517,6 +517,29 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await send_msg(
                                     "audio", data=base64.b64encode(audio_chunk).decode()
                                 )
+
+                                # Poll for barge-in during TTS playback
+                                try:
+                                    poll_data = await asyncio.wait_for(
+                                        websocket.receive_text(), timeout=0.01
+                                    )
+                                    poll_msg = json.loads(poll_data)
+                                    if poll_msg["type"] == "user_audio":
+                                        poll_audio = base64.b64decode(poll_msg["data"])
+                                        poll_rms = compute_rms(poll_audio)
+                                        if poll_rms > 600:  # BARGE_IN_THRESHOLD
+                                            is_speaking = False
+                                            logger.info(
+                                                "[Barge-in] Detected during TTS (RMS=%.0f)",
+                                                poll_rms,
+                                            )
+                                            await send_msg("barge_in", detected=True)
+                                            break
+                                except asyncio.TimeoutError:
+                                    pass  # No message, continue TTS
+                                except Exception:
+                                    pass
+
                         logger.info(
                             "[TTS完成] %.2fs, %d块",
                             time.time() - t_tts_start,
