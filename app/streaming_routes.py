@@ -601,8 +601,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     # Server-side barge-in detection during AI speech
                     if is_speaking:
-                        # Use higher threshold to filter noise (user talking to others)
-                        BARGE_IN_THRESHOLD = 800  # Higher than normal VAD
+                        # Use threshold slightly above VAD to filter noise
+                        BARGE_IN_THRESHOLD = (
+                            600  # Lowered from 800 for better detection
+                        )
                         if rms > BARGE_IN_THRESHOLD:
                             # User is speaking during AI playback - trigger barge-in
                             is_speaking = False

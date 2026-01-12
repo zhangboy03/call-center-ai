@@ -178,9 +178,9 @@ class PersistentASR:
             result[:30] if result else "(empty)",
         )
 
-        # Auto-restart for next recognition (saves initial setup time)
+        # Reset state - will restart on next recognize() call (lazy restart)
         self._is_started = False
-        self._restart_connection()
+        self._recognition = None
 
         return result or None
 
