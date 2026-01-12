@@ -55,6 +55,25 @@ except Exception as e:
     redis_client = None
 
 
+# Preloaded welcome audio cache (uses synthesize_audio defined below)
+
+_welcome_audio_cache: dict[str, bytes] = {}
+
+
+def get_preloaded_welcome_audio(patient_name: str) -> bytes:
+    """Generate and cache welcome audio for patient name."""
+    if patient_name in _welcome_audio_cache:
+        return _welcome_audio_cache[patient_name]
+
+    welcome_text = f"您好，我是品驰脑起搏器关爱中心的小驰。{patient_name}您好，您之前在我们这做了手术，现在差不多6个月了，我给您打电话是想做个术后随访。请问您现在方便吗？"
+    logger.info(f"[TTS] Generating welcome audio for: {patient_name}")
+    audio = synthesize_audio(welcome_text)  # Local function defined at ~line 780
+    if audio:
+        logger.info(f"[TTS] Cached welcome audio: {len(audio)} bytes")
+        _welcome_audio_cache[patient_name] = audio
+    return audio
+
+
 def should_query_rag(text: str) -> bool:
     """Heuristic to decide if an utterance is a question worth querying RAG."""
     if not text:
@@ -553,16 +572,13 @@ async def websocket_endpoint(websocket: WebSocket):
         is_speaking = True
         await send_msg("speaking", value=True)
 
-        # Use streaming TTS for faster first audio
-        TTS_VOICE = "longanyang"
-        chunk_count = 0
-        for audio_chunk in synthesize_audio_stream(welcome, TTS_VOICE):
-            if audio_chunk:
-                chunk_count += 1
-                if chunk_count == 1:
-                    logger.info("[TTS] Welcome first chunk arrived")
-                await send_msg("audio", data=base64.b64encode(audio_chunk).decode())
-        logger.info("[TTS] Welcome audio complete: %d chunks", chunk_count)
+        # Use preloaded welcome audio for better quality
+        welcome_audio = get_preloaded_welcome_audio(patient_name)
+        if welcome_audio:
+            logger.info(
+                "[TTS] Using preloaded welcome audio: %d bytes", len(welcome_audio)
+            )
+            await send_msg("audio", data=base64.b64encode(welcome_audio).decode())
         await send_msg("audio_end")
         is_speaking = False
         await send_msg("speaking", value=False)
