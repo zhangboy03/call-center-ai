@@ -552,13 +552,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
         is_speaking = True
         await send_msg("speaking", value=True)
-        audio = await asyncio.get_event_loop().run_in_executor(
-            executor, synthesize_audio, welcome
-        )
-        if audio:
-            logger.info("[TTS] Welcome audio: %d bytes", len(audio))
-            await send_msg("audio", data=base64.b64encode(audio).decode())
-            await send_msg("audio_end")
+
+        # Use streaming TTS for faster first audio
+        TTS_VOICE = "longanyang"
+        chunk_count = 0
+        for audio_chunk in synthesize_audio_stream(welcome, TTS_VOICE):
+            if audio_chunk:
+                chunk_count += 1
+                if chunk_count == 1:
+                    logger.info("[TTS] Welcome first chunk arrived")
+                await send_msg("audio", data=base64.b64encode(audio_chunk).decode())
+        logger.info("[TTS] Welcome audio complete: %d chunks", chunk_count)
+        await send_msg("audio_end")
         is_speaking = False
         await send_msg("speaking", value=False)
         await send_msg("status", text="通话中")
