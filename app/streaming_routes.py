@@ -452,7 +452,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Info collected but user might have questions - answer then close
                 missing_hint = "\n\n【温馨提示】信息已收集完毕。如果用户问了问题就简短回答，然后友好告别。如果没有问题，就直接告别。"
             elif missing:
-                missing_hint = f"\n\n【温馨提示】以下信息还没聊到，找合适的时机自然提起：{', '.join(missing[:3])}"
+                # DIRECTIVE: AI must ask next question immediately after answering
+                missing_hint = f'\\n\\n【重要】回答用户问题后，必须立即问下一个随访问题！不要问"还有其他问题吗"这种开放问题。立刻问：{missing[0]}'
             else:
                 missing_hint = ""
 
@@ -522,13 +523,14 @@ async def websocket_endpoint(websocket: WebSocket):
                                 # Poll for barge-in during TTS playback
                                 try:
                                     poll_data = await asyncio.wait_for(
-                                        websocket.receive_text(), timeout=0.01
+                                        websocket.receive_text(),
+                                        timeout=0.05,  # Increased from 0.01
                                     )
                                     poll_msg = json.loads(poll_data)
                                     if poll_msg["type"] == "user_audio":
                                         poll_audio = base64.b64decode(poll_msg["data"])
                                         poll_rms = compute_rms(poll_audio)
-                                        if poll_rms > 600:  # BARGE_IN_THRESHOLD
+                                        if poll_rms > 500:  # Lowered threshold
                                             is_speaking = False
                                             logger.info(
                                                 "[Barge-in] Detected during TTS (RMS=%.0f)",
@@ -536,10 +538,15 @@ async def websocket_endpoint(websocket: WebSocket):
                                             )
                                             await send_msg("barge_in", detected=True)
                                             break
+                                        elif poll_rms > 200:
+                                            logger.debug(
+                                                "[Barge-in] Low audio detected (RMS=%.0f)",
+                                                poll_rms,
+                                            )
                                 except asyncio.TimeoutError:
                                     pass  # No message, continue TTS
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug("[Barge-in] Poll error: %s", e)
 
                         logger.info(
                             "[TTS完成] %.2fs, %d块",
