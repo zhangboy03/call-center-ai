@@ -145,7 +145,7 @@ class PersistentASR:
         _logger.info("[PersistentASR] Started in %.0fms", (time.time() - t0) * 1000)
 
     def recognize(self, audio_data: bytes) -> str | None:
-        """识别音频 - 复用已有连接"""
+        """识别音频 - 使用 stop() 获取完整结果，然后自动重启连接"""
         import time
 
         t0 = time.time()
@@ -159,15 +159,16 @@ class PersistentASR:
         self._callback._completed = False
 
         # Send audio in small chunks
-        chunk_size = int(self._sample_rate * 0.1) * 2  # 100ms
+        chunk_size = int(self._sample_rate * 0.1) * 2  # 100ms chunks
         for i in range(0, len(audio_data), chunk_size):
             chunk = audio_data[i : i + chunk_size]
             self._recognition.send_audio_frame(chunk)
 
-        # Wait briefly for processing
-        import time as t
-
-        t.sleep(0.1)  # Give ASR time to process
+        # Call stop() to get final result (blocks until complete)
+        try:
+            self._recognition.stop()
+        except Exception as e:
+            _logger.warning("[PersistentASR] Stop error: %s", e)
 
         result = self._callback.final_text
         total_ms = (time.time() - t0) * 1000
@@ -177,7 +178,42 @@ class PersistentASR:
             result[:30] if result else "(empty)",
         )
 
+        # Auto-restart for next recognition (saves initial setup time)
+        self._is_started = False
+        self._restart_connection()
+
         return result or None
+
+    def _restart_connection(self) -> None:
+        """后台重启连接，准备下次识别"""
+        import threading
+
+        def restart():
+            try:
+                self._callback = _ResultCallback()
+                self._recognition = Recognition(
+                    model=self._model,
+                    format="pcm",
+                    sample_rate=self._sample_rate,
+                    callback=self._callback,
+                )
+                start_kwargs = {}
+                if self._model in [
+                    "paraformer-realtime-v2",
+                    "paraformer-realtime-8k-v2",
+                ]:
+                    start_kwargs["language_hints"] = [self._language]
+                if self._hot_words:
+                    start_kwargs["hotwords"] = self._hot_words
+                self._recognition.start(**start_kwargs)
+                self._is_started = True
+                _logger.debug("[PersistentASR] Connection restarted")
+            except Exception as e:
+                _logger.warning("[PersistentASR] Restart failed: %s", e)
+                self._is_started = False
+
+        # Restart in background thread (non-blocking)
+        threading.Thread(target=restart, daemon=True).start()
 
     def stop(self) -> None:
         """停止连接"""
