@@ -571,13 +571,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 if msg["type"] == "user_audio":
                     audio_data = base64.b64decode(msg["data"])
-
-                    # Hard mute during AI speech (prevents echo)
-                    if is_speaking:
-                        continue
-
-                    # VAD: Accumulate audio and detect speech
                     rms = compute_rms(audio_data)
+
+                    # Server-side barge-in detection during AI speech
+                    if is_speaking:
+                        # Use higher threshold to filter noise (user talking to others)
+                        BARGE_IN_THRESHOLD = 800  # Higher than normal VAD
+                        if rms > BARGE_IN_THRESHOLD:
+                            # User is speaking during AI playback - trigger barge-in
+                            is_speaking = False
+                            audio_buffer.clear()
+                            logger.info(
+                                "[Barge-in] Server detected user speech (RMS=%.0f), interrupting AI",
+                                rms,
+                            )
+                            await send_msg("barge_in", detected=True)
+                        continue  # Don't process further during speech
+
+                    # VAD: Accumulate audio and detect speech (rms already computed above)
                     current_time = time.time()
 
                     if rms > ENERGY_THRESHOLD:
