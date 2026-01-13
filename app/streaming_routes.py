@@ -191,12 +191,6 @@ async def websocket_endpoint(websocket: WebSocket):
     MIN_SPEECH_DURATION = 0.3  # Minimum speech duration to process
     ENERGY_THRESHOLD = 500  # RMS threshold for speech
 
-    # === Barge-in state (full-duplex support) ===
-    barge_in_triggered = False  # Flag to cancel TTS
-    barge_in_audio = bytearray()  # Preserve interrupted audio for ASR
-    BARGE_IN_THRESHOLD = 600  # RMS threshold during AI speech
-    BARGE_IN_DEBOUNCE = 0.3  # Seconds to wait before allowing another barge-in
-
     # === Persistent ASR for connection reuse ===
     persistent_asr = None  # Will be initialized with hot_words on first use
 
@@ -250,12 +244,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def process_text(user_text: str):
         """处理用户文本 - 简化版，支持优先"""
-        nonlocal \
-            messages, \
-            is_speaking, \
-            is_processing, \
-            barge_in_triggered, \
-            barge_in_audio
+        nonlocal messages, is_speaking, is_processing
 
         if is_processing:
             logger.warning("[Process] Already processing, skipping: %s", user_text[:20])
@@ -557,7 +546,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         t_tts_start = time.time()
                         chunk_count = 0
                         for audio_chunk in synthesize_audio_stream(sentence, TTS_VOICE):
-                            if not is_speaking or barge_in_triggered:
+                            if not is_speaking:
                                 break
                             if audio_chunk:
                                 chunk_count += 1
@@ -568,29 +557,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "audio", data=base64.b64encode(audio_chunk).decode()
                                 )
 
-                                # Poll for barge-in during TTS (full-duplex)
-                                try:
-                                    poll_data = await asyncio.wait_for(
-                                        websocket.receive_text(), timeout=0.02
-                                    )
-                                    poll_msg = json.loads(poll_data)
-                                    if poll_msg["type"] == "audio_frame":
-                                        poll_audio = base64.b64decode(poll_msg["data"])
-                                        poll_rms = compute_rms(poll_audio)
-                                        if poll_rms > BARGE_IN_THRESHOLD:
-                                            barge_in_triggered = True
-                                            barge_in_audio.extend(poll_audio)
-                                            is_speaking = False
-                                            logger.info(
-                                                "[Barge-in] Detected during TTS (RMS=%.0f)",
-                                                poll_rms,
-                                            )
-                                            await send_msg("stop_audio")
-                                            break
-                                except asyncio.TimeoutError:
-                                    pass  # No message, continue TTS
-                                except Exception as e:
-                                    logger.debug("[Barge-in] Poll error: %s", e)
+                                # Barge-in is handled client-side now
 
                         logger.info(
                             "[TTS完成] %.2fs, %d块",
@@ -1323,7 +1290,7 @@ PHONE_HTML = """
                 }
 
                 mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: true }
+                    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
                 });
 
                 incomingCall.classList.add('hidden');
@@ -1389,17 +1356,19 @@ PHONE_HTML = """
                 // Use absolute threshold since echo cancellation may affect relative values
                 const BARGE_IN_THRESHOLD = 0.01; // Much higher than SILENCE_THRESHOLD
                 if (isAISpeaking && volume > BARGE_IN_THRESHOLD) {
-                    console.log('🛑 BARGE-IN! volume:', volume);
-                    // Send audio_frame to server for server-side detection
-                    const base64 = arrayBufferToBase64(pcm.buffer);
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'audio_frame', data: base64 }));
-                    }
-                    // Also stop audio locally (client-side fallback)
+                    console.log('🛑 BARGE-IN DETECTED! volume:', volume, 'currentSource:', currentSource ? 'exists' : 'null');
+                    // Stop audio playback immediately
                     audioQueue = [];
                     if (currentSource) {
-                        try { currentSource.stop(0); } catch(e) {}
+                        try {
+                            currentSource.stop(0); // Stop immediately
+                            console.log('🛑 currentSource.stop() called successfully');
+                        } catch(e) {
+                            console.error('🛑 currentSource.stop() failed:', e);
+                        }
                         currentSource = null;
+                    } else {
+                        console.log('🛑 No currentSource to stop');
                     }
                     isPlaying = false;
                     isAISpeaking = false;
@@ -1492,15 +1461,6 @@ PHONE_HTML = """
                     status.textContent = msg.text;
                     break;
                 case 'user_text':
-                    // User spoke - stop AI audio immediately (ASR-based barge-in)
-                    console.log('🛑 User spoke, stopping AI audio');
-                    audioQueue = [];
-                    if (currentSource) {
-                        try { currentSource.stop(0); } catch(e) {}
-                        currentSource = null;
-                    }
-                    isPlaying = false;
-                    isAISpeaking = false;
                     addMessage('user', msg.text);
                     break;
                 case 'ai_text':
@@ -1523,22 +1483,6 @@ PHONE_HTML = """
                     // User spoke during AI speech - stop playback immediately
                     console.log('Barge-in detected, stopping audio');
                     audioQueue = [];
-                    if (currentSource) {
-                        try { currentSource.stop(0); } catch(e) {}
-                        currentSource = null;
-                    }
-                    isPlaying = false;
-                    isAISpeaking = false;
-                    status.textContent = '正在听您说话...';
-                    break;
-                case 'stop_audio':
-                    // Server detected barge-in, stop playback
-                    console.log('🛑 Server requested stop_audio');
-                    audioQueue = [];
-                    if (currentSource) {
-                        try { currentSource.stop(0); } catch(e) {}
-                        currentSource = null;
-                    }
                     isPlaying = false;
                     isAISpeaking = false;
                     status.textContent = '正在听您说话...';
@@ -1552,15 +1496,11 @@ PHONE_HTML = """
             if (isPlaying || audioQueue.length === 0) return;
             isPlaying = true;
 
-            while (audioQueue.length > 0) {
+            while (audioQueue.length > 0 && isAISpeaking) {
                 const buf = audioQueue.shift();
                 await playPCM(buf);
-                // Check for barge-in after each buffer
-                if (!isAISpeaking && audioQueue.length > 0) {
-                    // Barge-in detected, clear remaining queue
-                    audioQueue = [];
-                    break;
-                }
+                // Check again after each buffer - barge-in might have happened
+                if (!isAISpeaking) break;
             }
 
             isPlaying = false;
