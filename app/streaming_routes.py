@@ -1552,11 +1552,15 @@ PHONE_HTML = """
             if (isPlaying || audioQueue.length === 0) return;
             isPlaying = true;
 
-            while (audioQueue.length > 0 && isAISpeaking) {
+            while (audioQueue.length > 0) {
                 const buf = audioQueue.shift();
                 await playPCM(buf);
-                // Check again after each buffer - barge-in might have happened
-                if (!isAISpeaking) break;
+                // Check for barge-in after each buffer
+                if (!isAISpeaking && audioQueue.length > 0) {
+                    // Barge-in detected, clear remaining queue
+                    audioQueue = [];
+                    break;
+                }
             }
 
             isPlaying = false;
