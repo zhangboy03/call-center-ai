@@ -250,7 +250,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def process_text(user_text: str):
         """处理用户文本 - 简化版，支持优先"""
-        nonlocal messages, is_speaking, is_processing
+        nonlocal \
+            messages, \
+            is_speaking, \
+            is_processing, \
+            barge_in_triggered, \
+            barge_in_audio
 
         if is_processing:
             logger.warning("[Process] Already processing, skipping: %s", user_text[:20])
@@ -1318,7 +1323,7 @@ PHONE_HTML = """
                 }
 
                 mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+                    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: true }
                 });
 
                 incomingCall.classList.add('hidden');
