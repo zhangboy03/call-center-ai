@@ -1482,9 +1482,11 @@ PHONE_HTML = """
             if (isPlaying || audioQueue.length === 0) return;
             isPlaying = true;
 
-            while (audioQueue.length > 0) {
+            while (audioQueue.length > 0 && isAISpeaking) {
                 const buf = audioQueue.shift();
                 await playPCM(buf);
+                // Check again after each buffer - barge-in might have happened
+                if (!isAISpeaking) break;
             }
 
             isPlaying = false;
