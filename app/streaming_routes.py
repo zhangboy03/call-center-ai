@@ -1329,6 +1329,17 @@ PHONE_HTML = """
                     pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
                 }
 
+                // During AI speech: send audio immediately for barge-in detection
+                if (isAISpeaking && volume > SILENCE_THRESHOLD * 2) {
+                    // Send small audio packets for real-time barge-in
+                    const base64 = arrayBufferToBase64(pcm.buffer);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'user_audio', data: base64 }));
+                        console.log('Barge-in audio sent, volume:', volume);
+                    }
+                    return; // Skip normal VAD during barge-in
+                }
+
                 // VAD 逻辑
                 const hasSpeech = volume > SILENCE_THRESHOLD;
                 const now = Date.now();
@@ -1431,6 +1442,14 @@ PHONE_HTML = """
                     playAudio();
                     break;
                 case 'audio_end':
+                    break;
+                case 'barge_in':
+                    // User spoke during AI speech - stop playback immediately
+                    console.log('Barge-in detected, stopping audio');
+                    audioQueue = [];
+                    isPlaying = false;
+                    isAISpeaking = false;
+                    status.textContent = '正在听您说话...';
                     break;
                 case 'pong':
                     break;
