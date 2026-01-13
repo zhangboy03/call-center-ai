@@ -146,7 +146,7 @@ async def websocket_endpoint(websocket: WebSocket):
 反馈词：那挺好的 / 不错 / 恢复得可以 / 听起来还行
 
 【随访问题】按顺序自然问出（跳过已回答的）：
-1) 身份确认：是{patient_name}本人吗？→ 对方说"是/嗯/对"等就跳过！
+1) 身份确认：是{patient_name}本人或家属吗？→ 对方确认身份后立即跳过！（家属也算确认）
 2) 症状恢复：术后感觉怎么样？有改善吗？
 3) 控制打分：满分10分，症状控制打几分？
 4) 程控调参：做过几次程控？满意吗？
@@ -1197,6 +1197,7 @@ PHONE_HTML = """
         // 音频播放
         let audioQueue = [];
         let isPlaying = false;
+        let currentSource = null; // For barge-in audio stop
 
         // === DOM ===
         const incomingCall = document.getElementById('incomingCall');
@@ -1306,8 +1307,12 @@ PHONE_HTML = """
                 // Client-side barge-in: stop audio locally when user speaks during AI
                 if (isAISpeaking && volume > SILENCE_THRESHOLD * 1.5) {
                     console.log('Barge-in detected locally, stopping audio, volume:', volume);
-                    // Stop audio playback immediately (client-side only)
+                    // Stop audio playback immediately
                     audioQueue = [];
+                    if (currentSource) {
+                        try { currentSource.stop(); } catch(e) {}
+                        currentSource = null;
+                    }
                     isPlaying = false;
                     isAISpeaking = false;
                     status.textContent = '正在听您说话...';
@@ -1474,8 +1479,10 @@ PHONE_HTML = """
                     source.connect(ctx.destination);
                     source.onended = () => {
                         clearInterval(updateVol);
+                        currentSource = null;
                         resolve();
                     };
+                    currentSource = source;
                     source.start();
                 } catch (e) {
                     console.error('Play error:', e);
