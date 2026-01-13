@@ -1461,6 +1461,15 @@ PHONE_HTML = """
                     status.textContent = msg.text;
                     break;
                 case 'user_text':
+                    // User spoke - stop AI audio immediately (ASR-based barge-in)
+                    console.log('🛑 User spoke, stopping AI audio');
+                    audioQueue = [];
+                    if (currentSource) {
+                        try { currentSource.stop(0); } catch(e) {}
+                        currentSource = null;
+                    }
+                    isPlaying = false;
+                    isAISpeaking = false;
                     addMessage('user', msg.text);
                     break;
                 case 'ai_text':
