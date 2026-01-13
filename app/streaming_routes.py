@@ -1283,6 +1283,12 @@ PHONE_HTML = """
 
         async function acceptCall() {
             try {
+                // Resume AudioContext in user gesture context (required by browser policy)
+                if (playbackCtx.state === 'suspended') {
+                    await playbackCtx.resume();
+                    console.log('AudioContext resumed in click handler');
+                }
+
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
                 });
