@@ -143,7 +143,7 @@ async def websocket_endpoint(websocket: WebSocket):
 【回应方式】
 确认词（换着用）：嗯 / 好 / 行 / 是的 / 明白 / 了解
 过渡词：那... / 对了... / 顺便问下... / 另外...
-反馈词：那挺好的 / 不错 / 恢复得可以 / 听起来还行
+
 
 【随访问题】按顺序自然问出（跳过已回答的）：
 1) 身份确认：是{patient_name}本人或家属吗？→ 对方确认身份后立即跳过！（家属也算确认）
@@ -453,11 +453,48 @@ async def websocket_endpoint(websocket: WebSocket):
                 missing_hint = "\n\n【温馨提示】信息已收集完毕。如果用户问了问题就简短回答，然后友好告别。如果没有问题，就直接告别。"
             elif missing:
                 # DIRECTIVE: AI must ask next question immediately after answering
-                missing_hint = f'\\n\\n【重要】回答用户问题后，必须立即问下一个随访问题！不要问"还有其他问题吗"这种开放问题。立刻问：{missing[0]}'
+                missing_hint = (
+                    f'\n\n【下一步】必须立即问：{missing[0]}（不要问"还有其他问题吗"）'
+                )
             else:
                 missing_hint = ""
 
+            # Build explicit collected info for LLM
+            extracted = cached_extraction.get("extracted", {})
+            collected_items = []
+            slot_display_names = {
+                "is_patient": "身份确认",
+                "symptom_improvement": "症状改善",
+                "control_score": "症状控制打分",
+                "life_quality_score": "生活质量打分",
+                "programming_count": "程控次数",
+                "programming_satisfaction": "程控满意度",
+                "side_effects": "不良反应",
+                "mental_issues": "情绪问题",
+                "medication_issues": "用药问题",
+                "insurance_type": "医保类型",
+                "total_cost": "总费用",
+                "self_pay": "自费金额",
+                "other_concerns": "其他情况",
+            }
+            for key, value in extracted.items():
+                if value is not None and key in slot_display_names:
+                    display_name = slot_display_names[key]
+                    if isinstance(value, bool):
+                        value_str = "是" if value else "否"
+                    else:
+                        value_str = str(value)
+                    collected_items.append(f"{display_name}：{value_str}")
+
+            if collected_items:
+                collected_info = "\n\n【已收集信息】（不要重复问这些！）\n" + "\n".join(
+                    collected_items
+                )
+            else:
+                collected_info = ""
+
             current_system_prompt = f"""{base_system_prompt}
+{collected_info}
 {rag_context}
 {missing_hint}"""
 
