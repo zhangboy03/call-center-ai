@@ -608,13 +608,23 @@ async def websocket_endpoint(websocket: WebSocket):
         is_speaking = True
         await send_msg("speaking", value=True)
 
-        # Use preloaded welcome audio for better quality
+        # Use preloaded welcome audio if available, fallback to streaming
         welcome_audio = get_preloaded_welcome_audio(patient_name)
         if welcome_audio:
             logger.info(
                 "[TTS] Using preloaded welcome audio: %d bytes", len(welcome_audio)
             )
             await send_msg("audio", data=base64.b64encode(welcome_audio).decode())
+        else:
+            # Fallback: stream welcome audio if cache failed
+            logger.info("[TTS] Cache miss, streaming welcome audio")
+            chunk_count = 0
+            for audio_chunk in synthesize_audio_stream(welcome, TTS_VOICE):
+                if audio_chunk:
+                    chunk_count += 1
+                    await send_msg("audio", data=base64.b64encode(audio_chunk).decode())
+            logger.info("[TTS] Streamed welcome audio: %d chunks", chunk_count)
+
         await send_msg("audio_end")
         is_speaking = False
         await send_msg("speaking", value=False)
