@@ -520,33 +520,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "audio", data=base64.b64encode(audio_chunk).decode()
                                 )
 
-                                # Poll for barge-in during TTS playback
-                                try:
-                                    poll_data = await asyncio.wait_for(
-                                        websocket.receive_text(),
-                                        timeout=0.05,  # Increased from 0.01
-                                    )
-                                    poll_msg = json.loads(poll_data)
-                                    if poll_msg["type"] == "user_audio":
-                                        poll_audio = base64.b64decode(poll_msg["data"])
-                                        poll_rms = compute_rms(poll_audio)
-                                        if poll_rms > 500:  # Lowered threshold
-                                            is_speaking = False
-                                            logger.info(
-                                                "[Barge-in] Detected during TTS (RMS=%.0f)",
-                                                poll_rms,
-                                            )
-                                            await send_msg("barge_in", detected=True)
-                                            break
-                                        elif poll_rms > 200:
-                                            logger.debug(
-                                                "[Barge-in] Low audio detected (RMS=%.0f)",
-                                                poll_rms,
-                                            )
-                                except asyncio.TimeoutError:
-                                    pass  # No message, continue TTS
-                                except Exception as e:
-                                    logger.debug("[Barge-in] Poll error: %s", e)
+                                # Barge-in is handled client-side now
 
                         logger.info(
                             "[TTS完成] %.2fs, %d块",
@@ -1329,15 +1303,15 @@ PHONE_HTML = """
                     pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
                 }
 
-                // During AI speech: send audio immediately for barge-in detection
-                if (isAISpeaking && volume > SILENCE_THRESHOLD * 2) {
-                    // Send small audio packets for real-time barge-in
-                    const base64 = arrayBufferToBase64(pcm.buffer);
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'user_audio', data: base64 }));
-                        console.log('Barge-in audio sent, volume:', volume);
-                    }
-                    return; // Skip normal VAD during barge-in
+                // Client-side barge-in: stop audio locally when user speaks during AI
+                if (isAISpeaking && volume > SILENCE_THRESHOLD * 1.5) {
+                    console.log('Barge-in detected locally, stopping audio, volume:', volume);
+                    // Stop audio playback immediately (client-side only)
+                    audioQueue = [];
+                    isPlaying = false;
+                    isAISpeaking = false;
+                    status.textContent = '正在听您说话...';
+                    // Continue with normal VAD - don't return, let speech be processed
                 }
 
                 // VAD 逻辑
