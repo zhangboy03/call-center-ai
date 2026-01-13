@@ -1341,6 +1341,11 @@ PHONE_HTML = """
                 // 总是更新音量显示
                 updateVolume(volume);
 
+                // Debug: Log volume during AI speech every 500ms
+                if (isAISpeaking && Math.random() < 0.02) {
+                    console.log('[Mic during AI] volume:', volume.toFixed(4));
+                }
+
                 // 转换为 PCM
                 const pcm = new Int16Array(input.length);
                 for (let i = 0; i < input.length; i++) {
@@ -1348,13 +1353,22 @@ PHONE_HTML = """
                 }
 
                 // Client-side barge-in: stop audio locally when user speaks during AI
-                if (isAISpeaking && volume > SILENCE_THRESHOLD * 1.5) {
-                    console.log('Barge-in detected locally, stopping audio, volume:', volume);
+                // Use absolute threshold since echo cancellation may affect relative values
+                const BARGE_IN_THRESHOLD = 0.01; // Much higher than SILENCE_THRESHOLD
+                if (isAISpeaking && volume > BARGE_IN_THRESHOLD) {
+                    console.log('🛑 BARGE-IN DETECTED! volume:', volume, 'currentSource:', currentSource ? 'exists' : 'null');
                     // Stop audio playback immediately
                     audioQueue = [];
                     if (currentSource) {
-                        try { currentSource.stop(); } catch(e) {}
+                        try {
+                            currentSource.stop(0); // Stop immediately
+                            console.log('🛑 currentSource.stop() called successfully');
+                        } catch(e) {
+                            console.error('🛑 currentSource.stop() failed:', e);
+                        }
                         currentSource = null;
+                    } else {
+                        console.log('🛑 No currentSource to stop');
                     }
                     isPlaying = false;
                     isAISpeaking = false;
