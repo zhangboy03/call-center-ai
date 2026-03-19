@@ -116,6 +116,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+traces/
+*.jsonl
 
 # Translations
 *.mo
@@ -136,6 +138,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/demo.mp4
 
 # PyBuilder
 .pybuilder/
